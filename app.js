@@ -44,7 +44,7 @@ function handleFile(type, file) {
   if (!validate(type, file)) return;
   if (type !== 'video') return showFile(type, file);
   const probe = document.createElement('video'); probe.preload = 'metadata';
-  probe.onloadedmetadata = () => { URL.revokeObjectURL(probe.src); if (probe.duration < 3 || probe.duration > 30) return setMessage('Your motion video must be between 3 and 30 seconds.', true); showFile(type, file); };
+  probe.onloadedmetadata = () => { URL.revokeObjectURL(probe.src); if (probe.duration < 3 || probe.duration > 10) return setMessage('Your motion video must be between 3 and 10 seconds.', true); showFile(type, file); };
   probe.onerror = () => setMessage('We could not read that video. Please choose an MP4 or MOV file.', true);
   probe.src = URL.createObjectURL(file);
 }
@@ -64,7 +64,7 @@ async function openCreditDialog() {
   try {
     const response = await fetch('/api/credit-packs'), data = await response.json();
     if (!data.enabled) { body.innerHTML = '<p class="section-label">Not live yet</p><h2>Credit packs are being configured.</h2><p>Checkout will appear here once Stripe is connected.</p>'; return; }
-    body.innerHTML = `<p class="section-label">Credit packs</p><h2>Choose your next render budget.</h2><div class="credit-packs">${data.packs.map(pack => `<button type="button" data-pack="${pack.id}"><strong>${pack.name}</strong><span>${pack.credits} credits <b>→</b></span></button>`).join('')}</div><p>Payments are processed securely by Stripe.</p>`;
+    body.innerHTML = `<p class="section-label">Credit packs</p><h2>Choose your next render budget.</h2><div class="credit-packs">${data.packs.map(pack => `<button type="button" data-pack="${pack.id}"><strong>${pack.name}</strong><span>${pack.description} · ${pack.credits} credits <b>→</b></span></button>`).join('')}</div><p>720p uses 10 credits per clip. 1080p uses 20 credits. Payments are processed securely by Stripe.</p>`;
     body.querySelectorAll('[data-pack]').forEach(button => button.addEventListener('click', async () => {
       button.disabled = true; button.textContent = 'Opening secure checkout…';
       try { const checkout = await fetch('/api/stripe/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pack: button.dataset.pack }) }); const data = await checkout.json(); if (!checkout.ok) throw new Error(data.error); window.location.assign(data.url); } catch (error) { button.disabled = false; button.textContent = error.message; }

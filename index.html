@@ -35,7 +35,7 @@
       <section class="workspace" aria-labelledby="create-title">
         <div class="workspace-heading">
           <div><p class="section-label">New generation</p><h2 id="create-title">Create a motion clip</h2></div>
-          <div class="credit-balance"><span class="credit-dot"></span><span><strong>12</strong> credits available</span><button type="button" id="buyCredits">Add credits</button></div>
+          <div class="credit-balance"><span class="credit-dot"></span><span><strong>—</strong> credits available</span><button type="button" id="buyCredits">Add credits</button></div>
         </div>
 
         <form id="generationForm" novalidate>
@@ -58,7 +58,7 @@
                 <input id="videoInput" accept="video/mp4,video/quicktime,.mp4,.mov" type="file" hidden />
                 <span class="upload-icon play">▶</span>
                 <span class="upload-title">Drop your motion video here</span>
-                <span class="upload-detail">MP4 or MOV · 3–30 sec · max 100 MB</span>
+                <span class="upload-detail">MP4 or MOV · 3–10 sec · max 100 MB</span>
                 <span class="browse">Browse files</span>
               </label>
               <div class="file-preview" id="videoPreview" hidden><div class="video-thumb">▶</div><div><strong></strong><span></span></div><button class="remove-file" type="button" aria-label="Remove video">×</button></div>
@@ -70,7 +70,7 @@
           <div class="settings-grid">
             <label class="field prompt-field"><span>Creative direction <i>Optional</i></span><textarea id="prompt" maxlength="2500" placeholder="Describe the scene, mood, or details you want to preserve…"></textarea><small><span id="characterCount">0</span>/2500</small></label>
             <label class="field"><span>Background</span><select id="background"><option value="input_image">Keep image background</option><option value="input_video">Use video background</option></select></label>
-            <label class="field"><span>Output quality</span><select id="quality"><option value="720p">720p · 3 credits</option><option value="1080p">1080p · 6 credits</option></select></label>
+            <label class="field"><span>Output quality</span><select id="quality"><option value="720p">720p · 10 credits</option><option value="1080p">1080p · 20 credits</option></select></label>
           </div>
 
           <label class="consent"><input id="rightsConsent" type="checkbox" /> <span>I confirm that I have the rights and consent to use both references.</span></label>
@@ -90,7 +90,7 @@
         <div class="steps"><article><span>01</span><h3>Choose a character</h3><p>Upload a clear image with the subject visible.</p></article><article><span>02</span><h3>Add a performance</h3><p>Use a short video to guide the motion and gestures.</p></article><article><span>03</span><h3>Get your clip</h3><p>We generate a new video you can preview and download.</p></article></div>
       </section>
 
-      <section class="pricing" id="pricing"><div><p class="section-label">Clear pricing</p><h2>Only pay for what you create.</h2></div><p>Start with credits. No subscriptions and no surprise fees in this first release.</p><button type="button" id="pricingButton">View credit packs <span>→</span></button></section>
+      <section class="pricing" id="pricing"><div><p class="section-label">Clear pricing</p><h2>Only pay for what you create.</h2></div><p><strong>Starter $20</strong> gives you 2 clips. <strong>Creator $50</strong> gives you 6 clips. Each clip is up to 10 seconds at 720p; 1080p uses double credits.</p><button type="button" id="pricingButton">View credit packs <span>→</span></button></section>
     </main>
     <footer><a class="brand" href="#top"><span class="brand-mark">M</span>motionframe</a><span>© 2026 Motionframe. Motion, made yours.</span><span><a href="#">Terms</a><a href="#">Privacy</a></span></footer>
     <dialog id="creditDialog"><button class="dialog-close" type="button" aria-label="Close">×</button><div id="creditDialogBody"><p class="section-label">Credit packs</p><h2>Loading available packs…</h2><p>Secure checkout is provided by Stripe.</p></div><button class="generate-button dialog-button" type="button">Close</button></dialog>

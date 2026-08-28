@@ -23,10 +23,12 @@ const STRIPE_WEBHOOK_SECRET = (process.env.STRIPE_WEBHOOK_SECRET || '').trim();
 const MONGODB_URI = (process.env.MONGODB_URI || '').trim();
 const SESSION_SECRET = (process.env.SESSION_SECRET || '').trim();
 const SESSION_DAYS = 30;
+const MIN_CLIP_SECONDS = 3;
+const MAX_CLIP_SECONDS = 10;
 const scryptAsync = promisify(scrypt);
 const STRIPE_PACKS = [
-  { id: 'starter', name: 'Starter', credits: Number(process.env.STRIPE_STARTER_CREDITS || 15), priceId: (process.env.STRIPE_PRICE_STARTER || '').trim() },
-  { id: 'creator', name: 'Creator', credits: Number(process.env.STRIPE_CREATOR_CREDITS || 50), priceId: (process.env.STRIPE_PRICE_CREATOR || '').trim() },
+  { id: 'starter', name: 'Starter — $20', description: '2 clips up to 10 seconds at 720p', credits: Number(process.env.STRIPE_STARTER_CREDITS || 20), priceId: (process.env.STRIPE_PRICE_STARTER || '').trim() },
+  { id: 'creator', name: 'Creator — $50', description: '6 clips up to 10 seconds at 720p', credits: Number(process.env.STRIPE_CREATOR_CREDITS || 60), priceId: (process.env.STRIPE_PRICE_CREATOR || '').trim() },
 ].filter(pack => Number.isSafeInteger(pack.credits) && pack.credits > 0);
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png']);
 const VIDEO_TYPES = new Set(['video/mp4', 'video/quicktime']);
@@ -47,13 +49,13 @@ if (MONGODB_URI) {
 }
 async function loadState() {
   try { return JSON.parse(await readFile(STATE_FILE, 'utf8')); }
-  catch { return { account: { credits: Number(process.env.STARTING_CREDITS || 12) }, jobs: {}, stripeEvents: {} }; }
+  catch { return { account: { credits: Number(process.env.STARTING_CREDITS || 0) }, jobs: {}, stripeEvents: {} }; }
 }
 let saving = Promise.resolve();
 function persist() { saving = saving.then(async () => { const tmp = `${STATE_FILE}.tmp`; await writeFile(tmp, JSON.stringify(state, null, 2)); await rename(tmp, STATE_FILE); }); return saving; }
 const json = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
 const error = (res, status, message) => json(res, status, { error: message });
-const creditsFor = quality => quality === '1080p' ? 6 : 3;
+const creditsFor = quality => quality === '1080p' ? 20 : 10;
 const publicJob = (job, credits = state.account.credits) => ({ id: job.id, status: job.status, message: job.message, error: job.error, progress: job.progress, outputUrl: job.outputUrl, demo: job.demo, credits });
 function safeEqual(one, two) { if (!one || !two) return false; const a = Buffer.from(one), b = Buffer.from(two); return a.length === b.length && timingSafeEqual(a, b); }
 function cookies(req) { return Object.fromEntries(String(req.headers.cookie || '').split(';').map(item => item.trim().split('=').map(decodeURIComponent)).filter(([key]) => key)); }
@@ -74,7 +76,7 @@ async function startSession(res, userId) { const token = randomBytes(32).toStrin
 async function signUp(req, res) {
   try { if (!configuredAccounts()) throw new Error('Accounts are not configured yet.'); const { email, password } = await jsonBody(req); const cleanEmail = String(email || '').trim().toLowerCase(), cleanPassword = String(password || '');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) throw new Error('Enter a valid email address.'); if (cleanPassword.length < 10) throw new Error('Use at least 10 characters for your password.');
-    const user = { email: cleanEmail, passwordHash: await hashPassword(cleanPassword), credits: Number(process.env.STARTING_CREDITS || 3), createdAt: new Date() };
+    const user = { email: cleanEmail, passwordHash: await hashPassword(cleanPassword), credits: Number(process.env.STARTING_CREDITS || 0), createdAt: new Date() };
     const created = await database.collection('users').insertOne(user); user._id = created.insertedId; await startSession(res, user._id); json(res, 201, { user: publicUser(user) });
   } catch (e) { error(res, e?.code === 11000 ? 409 : 400, e?.code === 11000 ? 'An account already exists for this email.' : e.message); }
 }
@@ -132,6 +134,43 @@ async function validUpload(file, types, limit, label) {
   const isJpeg = header.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
   const isMp4 = header.subarray(4, 8).equals(Buffer.from('ftyp'));
   if ((file.type.startsWith('image/') && !isPng && !isJpeg) || (file.type.startsWith('video/') && !isMp4)) throw new Error(`${label} file content is not valid.`);
+}
+function boxHeader(bytes, offset, limit) {
+  if (offset + 8 > limit) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let size = view.getUint32(offset), headerSize = 8;
+  if (size === 1) {
+    if (offset + 16 > limit) return null;
+    size = Number(view.getBigUint64(offset + 8)); headerSize = 16;
+  }
+  if (!size) size = limit - offset;
+  if (size < headerSize || offset + size > limit) return null;
+  return { type: String.fromCharCode(...bytes.slice(offset + 4, offset + 8)), start: offset, end: offset + size, data: offset + headerSize };
+}
+async function videoDurationSeconds(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let offset = 0, movie;
+  while (offset < bytes.length) {
+    const box = boxHeader(bytes, offset, bytes.length); if (!box) break;
+    if (box.type === 'moov') { movie = box; break; }
+    offset = box.end;
+  }
+  if (!movie) throw new Error('We could not verify the duration of this motion video.');
+  offset = movie.data;
+  while (offset < movie.end) {
+    const box = boxHeader(bytes, offset, movie.end); if (!box) break;
+    if (box.type === 'mvhd') {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), version = view.getUint8(box.data);
+      const timescaleOffset = box.data + (version === 1 ? 20 : 12), durationOffset = box.data + (version === 1 ? 24 : 16);
+      if (durationOffset + (version === 1 ? 8 : 4) > box.end) break;
+      const timescale = view.getUint32(timescaleOffset);
+      const duration = version === 1 ? Number(view.getBigUint64(durationOffset)) : view.getUint32(durationOffset);
+      if (timescale > 0 && Number.isFinite(duration)) return duration / timescale;
+      break;
+    }
+    offset = box.end;
+  }
+  throw new Error('We could not verify the duration of this motion video.');
 }
 async function parseForm(req) {
   const length = Number(req.headers['content-length'] || 0);
@@ -193,8 +232,10 @@ async function createJob(req, res) {
     if (form.get('rightsConfirmed') !== 'true') throw new Error('Please confirm that you have the rights to use both references.');
     const image = form.get('image'), video = form.get('video'), quality = form.get('quality') === '1080p' ? '1080p' : '720p';
     await validUpload(image, IMAGE_TYPES, 10 * 1024 * 1024, 'Image'); await validUpload(video, VIDEO_TYPES, 100 * 1024 * 1024, 'Video');
+    const duration = await videoDurationSeconds(video);
+    if (duration < MIN_CLIP_SECONDS || duration > MAX_CLIP_SECONDS + 0.01) throw new Error(`Your motion video must be between ${MIN_CLIP_SECONDS} and ${MAX_CLIP_SECONDS} seconds.`);
     const cost = creditsFor(quality), balance = user?.credits ?? state.account.credits; if (balance < cost) throw new Error(`You need ${cost} credits for this quality.`);
-    const id = randomUUID(), job = { id, ...(user ? { userId: user._id } : {}), status: KIE_API_KEY ? 'queued' : 'demo_ready', progress: KIE_API_KEY ? 5 : 100, message: KIE_API_KEY ? 'Your generation is queued securely.' : 'Demo mode is active — no generation was sent.', demo: !KIE_API_KEY, prompt: String(form.get('prompt') || '').slice(0, 2500), quality, background: form.get('background') === 'input_video' ? 'input_video' : 'input_image', createdAt: new Date().toISOString(), cost };
+    const id = randomUUID(), job = { id, ...(user ? { userId: user._id } : {}), status: KIE_API_KEY ? 'queued' : 'demo_ready', progress: KIE_API_KEY ? 5 : 100, message: KIE_API_KEY ? 'Your generation is queued securely.' : 'Demo mode is active — no generation was sent.', demo: !KIE_API_KEY, prompt: String(form.get('prompt') || '').slice(0, 2500), quality, background: form.get('background') === 'input_video' ? 'input_video' : 'input_image', duration, createdAt: new Date().toISOString(), cost };
     job.imagePath = await saveFile(image, id, 'image'); job.videoPath = await saveFile(video, id, 'video');
     if (user) { await database.collection('users').updateOne({ _id: user._id, credits: { $gte: cost } }, { $inc: { credits: -cost } }); await database.collection('jobs').insertOne(job); } else { state.account.credits -= cost; state.jobs[id] = job; await persist(); }
     json(res, 201, publicJob(job, balance - cost));
@@ -214,7 +255,7 @@ const server = createServer(async (req, res) => {
   if (req.method === 'POST' && pathname === '/api/auth/signout') return signOut(req, res);
   if (req.method === 'GET' && pathname === '/api/auth/me') { const user = await currentUser(req); return json(res, 200, { configured: configuredAccounts(), user: user ? publicUser(user) : null }); }
   if (req.method === 'GET' && pathname === '/api/account') { const user = await currentUser(req); if (configuredAccounts() && !user) return error(res, 401, 'Please sign in.'); return json(res, 200, { credits: user?.credits ?? state.account.credits, live: Boolean(KIE_API_KEY) }); }
-  if (req.method === 'GET' && pathname === '/api/credit-packs') return json(res, 200, { enabled: stripeReady(), packs: STRIPE_PACKS.filter(pack => pack.priceId).map(({ id, name, credits }) => ({ id, name, credits })) });
+  if (req.method === 'GET' && pathname === '/api/credit-packs') return json(res, 200, { enabled: stripeReady(), packs: STRIPE_PACKS.filter(pack => pack.priceId).map(({ id, name, description, credits }) => ({ id, name, description, credits })) });
   if (req.method === 'POST' && pathname === '/api/stripe/checkout') return createCheckout(req, res);
   if (req.method === 'POST' && pathname === '/api/stripe/webhook') return stripeWebhook(req, res);
   if (req.method === 'POST' && pathname === '/api/jobs') return createJob(req, res);
