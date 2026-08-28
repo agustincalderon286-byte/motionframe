@@ -1,0 +1,8 @@
+{
+  "name": "motionframe",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": { "dev": "node --env-file-if-exists=.env server.mjs", "start": "node --env-file-if-exists=.env server.mjs" },
+  "engines": { "node": ">=20" }
+}

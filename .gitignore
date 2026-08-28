@@ -1,0 +1,5 @@
+.env
+data/state.json
+uploads/*
+!uploads/.gitkeep
+.DS_Store

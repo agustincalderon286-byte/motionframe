@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: motionframe
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/account
+    envVars:
+      - key: NODE_VERSION
+        value: 20.20.1
+      - key: HOST
+        value: 0.0.0.0
+      - key: STARTING_CREDITS
+        value: 12
+      - key: KIE_API_KEY
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: KIE_CALLBACK_SECRET
+        generateValue: true
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_STARTER
+        sync: false
+      - key: STRIPE_PRICE_CREATOR
+        sync: false

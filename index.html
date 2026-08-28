@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Turn a reference image and a movement video into an AI motion clip." />
+    <title>Motionframe — Bring images to life</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      .consent{align-items:flex-start;color:#777;cursor:pointer;display:flex;font-size:10px;gap:8px;margin-top:20px}.consent input{accent-color:#8265ee;margin:1px 0 0}.form-footer{margin-top:18px}.result-download{background:#d7fa55;border-radius:6px;color:#171718;display:inline-block;font-size:11px;font-weight:700;margin-top:18px;padding:10px 12px;text-decoration:none}.result-download span{margin-left:11px}.credit-packs{display:grid;gap:8px;margin:18px 0}.credit-packs button{align-items:center;background:#f4f4ef;border:1px solid #dedfd9;border-radius:7px;cursor:pointer;display:flex;justify-content:space-between;padding:13px;text-align:left}.credit-packs button strong{font-size:12px}.credit-packs button span{color:#62529e;font:10px 'DM Mono',monospace}.credit-packs button b{font-size:15px;margin-left:6px}.hero-with-image{align-items:center;display:grid;grid-template-columns:1fr .76fr;gap:28px;padding:64px 50px 60px;text-align:left}.hero-content .eyebrow{justify-content:flex-start}.hero-content .hero-copy{margin:0;max-width:490px}.hero-content .hero-meta{justify-content:flex-start}.hero-visual{aspect-ratio:4/5;border-radius:18px;box-shadow:0 24px 50px #19172635;overflow:hidden;position:relative}.hero-visual:after{background:linear-gradient(180deg,transparent 50%,#0d0e1488);content:'';inset:0;position:absolute}.hero-visual img{height:100%;object-fit:cover;width:100%}.image-caption{bottom:18px;color:white;font:10px/1.5 'DM Mono',monospace;letter-spacing:1px;position:absolute;right:19px;text-align:right;text-transform:uppercase;z-index:1}@media(max-width:720px){.hero-with-image{grid-template-columns:1fr;padding:54px 5px 45px;text-align:center}.hero-content .eyebrow,.hero-content .hero-meta{justify-content:center}.hero-content .hero-copy{margin:auto}.hero-visual{margin:28px auto 0;max-width:360px;width:100%}}
+    </style>
+  </head>
+  <body>
+    <div class="noise" aria-hidden="true"></div>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Motionframe home"><span class="brand-mark">M</span>motionframe</a>
+      <nav aria-label="Main navigation"><a href="#how-it-works">How it works</a><a href="#pricing">Pricing</a></nav>
+      <button class="account-button" type="button">Sign in <span>↗</span></button>
+    </header>
+
+    <main id="top">
+      <section class="hero hero-with-image">
+        <div class="hero-content">
+          <p class="eyebrow"><span></span> AI motion control</p>
+          <h1>Make a still image<br /><em>move like magic.</em></h1>
+          <p class="hero-copy">Upload a character image and a movement reference. We turn them into a polished motion clip while keeping the character recognizably yours.</p>
+          <div class="hero-meta"><span>Motion transfer</span><span>•</span><span>Up to 1080p</span><span>•</span><span>Ready in minutes</span></div>
+        </div>
+        <div class="hero-visual"><img src="motionframe-hero.png" alt="A performer shown with luminous motion trails" /><span class="image-caption">Motion transfer<br />in one frame</span></div>
+      </section>
+
+      <section class="workspace" aria-labelledby="create-title">
+        <div class="workspace-heading">
+          <div><p class="section-label">New generation</p><h2 id="create-title">Create a motion clip</h2></div>
+          <div class="credit-balance"><span class="credit-dot"></span><span><strong>12</strong> credits available</span><button type="button" id="buyCredits">Add credits</button></div>
+        </div>
+
+        <form id="generationForm" novalidate>
+          <div class="upload-grid">
+            <article class="upload-card" data-upload="image">
+              <div class="upload-topline"><span class="step-number">01</span><span class="file-type">IMAGE REFERENCE</span><span class="required">Required</span></div>
+              <label class="drop-zone" for="imageInput" id="imageDropZone">
+                <input id="imageInput" accept="image/jpeg,image/png" type="file" hidden />
+                <span class="upload-icon">↑</span>
+                <span class="upload-title">Drop your image here</span>
+                <span class="upload-detail">JPG or PNG · max 10 MB</span>
+                <span class="browse">Browse files</span>
+              </label>
+              <div class="file-preview" id="imagePreview" hidden><img alt="Selected image preview" /><div><strong></strong><span></span></div><button class="remove-file" type="button" aria-label="Remove image">×</button></div>
+            </article>
+
+            <article class="upload-card" data-upload="video">
+              <div class="upload-topline"><span class="step-number">02</span><span class="file-type">MOTION REFERENCE</span><span class="required">Required</span></div>
+              <label class="drop-zone" for="videoInput" id="videoDropZone">
+                <input id="videoInput" accept="video/mp4,video/quicktime,.mp4,.mov" type="file" hidden />
+                <span class="upload-icon play">▶</span>
+                <span class="upload-title">Drop your motion video here</span>
+                <span class="upload-detail">MP4 or MOV · 3–30 sec · max 100 MB</span>
+                <span class="browse">Browse files</span>
+              </label>
+              <div class="file-preview" id="videoPreview" hidden><div class="video-thumb">▶</div><div><strong></strong><span></span></div><button class="remove-file" type="button" aria-label="Remove video">×</button></div>
+            </article>
+          </div>
+
+          <p class="upload-note">Use references you own or have permission to use. One main person, clear framing, and steady movement produce the best results.</p>
+
+          <div class="settings-grid">
+            <label class="field prompt-field"><span>Creative direction <i>Optional</i></span><textarea id="prompt" maxlength="2500" placeholder="Describe the scene, mood, or details you want to preserve…"></textarea><small><span id="characterCount">0</span>/2500</small></label>
+            <label class="field"><span>Background</span><select id="background"><option value="input_image">Keep image background</option><option value="input_video">Use video background</option></select></label>
+            <label class="field"><span>Output quality</span><select id="quality"><option value="720p">720p · 3 credits</option><option value="1080p">1080p · 6 credits</option></select></label>
+          </div>
+
+          <label class="consent"><input id="rightsConsent" type="checkbox" /> <span>I confirm that I have the rights and consent to use both references.</span></label>
+          <div class="form-footer"><p id="formMessage" role="alert" aria-live="polite">Add both references and confirm your rights to begin.</p><button id="generateButton" class="generate-button" type="submit" disabled>Generate motion clip <span>→</span></button></div>
+        </form>
+      </section>
+
+      <section class="result-card" id="resultCard" hidden aria-live="polite">
+        <div class="result-status"><span class="spinner"></span><div><p class="section-label" id="resultEyebrow">Generation in progress</p><h2 id="resultTitle">Your clip is being created</h2><p id="progressText">Preparing secure upload…</p></div><span class="progress-number" id="progressNumber">0%</span></div>
+        <div class="progress-track"><span id="progressBar"></span></div>
+        <p class="result-hint" id="resultHint">You can keep this page open. We’ll make your result available here when it’s ready.</p>
+        <a class="result-download" id="downloadResult" hidden target="_blank" rel="noreferrer">Open generated video <span>↗</span></a>
+      </section>
+
+      <section class="how-it-works" id="how-it-works">
+        <p class="section-label">How it works</p><h2>Simple in. Remarkable out.</h2>
+        <div class="steps"><article><span>01</span><h3>Choose a character</h3><p>Upload a clear image with the subject visible.</p></article><article><span>02</span><h3>Add a performance</h3><p>Use a short video to guide the motion and gestures.</p></article><article><span>03</span><h3>Get your clip</h3><p>We generate a new video you can preview and download.</p></article></div>
+      </section>
+
+      <section class="pricing" id="pricing"><div><p class="section-label">Clear pricing</p><h2>Only pay for what you create.</h2></div><p>Start with credits. No subscriptions and no surprise fees in this first release.</p><button type="button" id="pricingButton">View credit packs <span>→</span></button></section>
+    </main>
+    <footer><a class="brand" href="#top"><span class="brand-mark">M</span>motionframe</a><span>© 2026 Motionframe. Motion, made yours.</span><span><a href="#">Terms</a><a href="#">Privacy</a></span></footer>
+    <dialog id="creditDialog"><button class="dialog-close" type="button" aria-label="Close">×</button><div id="creditDialogBody"><p class="section-label">Credit packs</p><h2>Loading available packs…</h2><p>Secure checkout is provided by Stripe.</p></div><button class="generate-button dialog-button" type="button">Close</button></dialog>
+    <script src="app.js"></script>
+  </body>
+</html>
