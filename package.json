@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": { "dev": "node --env-file-if-exists=.env server.mjs", "start": "node --env-file-if-exists=.env server.mjs" },
+  "dependencies": { "mongodb": "^6.20.0" },
   "engines": { "node": ">=20" }
 }

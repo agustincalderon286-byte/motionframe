@@ -1,10 +1,12 @@
 import { createServer } from 'node:http';
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
+import { promisify } from 'node:util';
+import { MongoClient, ObjectId } from 'mongodb';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(ROOT, 'data'), UPLOADS = path.join(ROOT, 'uploads');
@@ -18,6 +20,10 @@ const CALLBACK_SECRET = (process.env.KIE_CALLBACK_SECRET || '').trim();
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
 const STRIPE_SECRET_KEY = (process.env.STRIPE_SECRET_KEY || '').trim();
 const STRIPE_WEBHOOK_SECRET = (process.env.STRIPE_WEBHOOK_SECRET || '').trim();
+const MONGODB_URI = (process.env.MONGODB_URI || '').trim();
+const SESSION_SECRET = (process.env.SESSION_SECRET || '').trim();
+const SESSION_DAYS = 30;
+const scryptAsync = promisify(scrypt);
 const STRIPE_PACKS = [
   { id: 'starter', name: 'Starter', credits: Number(process.env.STRIPE_STARTER_CREDITS || 15), priceId: (process.env.STRIPE_PRICE_STARTER || '').trim() },
   { id: 'creator', name: 'Creator', credits: Number(process.env.STRIPE_CREATOR_CREDITS || 50), priceId: (process.env.STRIPE_PRICE_CREATOR || '').trim() },
@@ -28,6 +34,17 @@ const MIME = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=u
 
 await mkdir(DATA, { recursive: true }); await mkdir(UPLOADS, { recursive: true });
 let state = await loadState();
+let database = null;
+if (MONGODB_URI) {
+  const client = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
+  await client.connect(); database = client.db(process.env.MONGODB_DB || 'motionframe');
+  await Promise.all([
+    database.collection('users').createIndex({ email: 1 }, { unique: true }),
+    database.collection('sessions').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    database.collection('stripeEvents').createIndex({ eventId: 1 }, { unique: true }),
+    database.collection('jobs').createIndex({ userId: 1, createdAt: -1 }),
+  ]);
+}
 async function loadState() {
   try { return JSON.parse(await readFile(STATE_FILE, 'utf8')); }
   catch { return { account: { credits: Number(process.env.STARTING_CREDITS || 12) }, jobs: {}, stripeEvents: {} }; }
@@ -37,8 +54,36 @@ function persist() { saving = saving.then(async () => { const tmp = `${STATE_FIL
 const json = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
 const error = (res, status, message) => json(res, status, { error: message });
 const creditsFor = quality => quality === '1080p' ? 6 : 3;
-const publicJob = job => ({ id: job.id, status: job.status, message: job.message, error: job.error, progress: job.progress, outputUrl: job.outputUrl, demo: job.demo, credits: state.account.credits });
+const publicJob = (job, credits = state.account.credits) => ({ id: job.id, status: job.status, message: job.message, error: job.error, progress: job.progress, outputUrl: job.outputUrl, demo: job.demo, credits });
 function safeEqual(one, two) { if (!one || !two) return false; const a = Buffer.from(one), b = Buffer.from(two); return a.length === b.length && timingSafeEqual(a, b); }
+function cookies(req) { return Object.fromEntries(String(req.headers.cookie || '').split(';').map(item => item.trim().split('=').map(decodeURIComponent)).filter(([key]) => key)); }
+function sessionHash(token) { return createHmac('sha256', SESSION_SECRET).update(token).digest('hex'); }
+function configuredAccounts() { return Boolean(database && SESSION_SECRET.length >= 32); }
+async function hashPassword(password, salt = randomBytes(16).toString('hex')) { return `${salt}:${(await scryptAsync(password, salt, 64)).toString('hex')}`; }
+async function passwordMatches(password, stored) { const [salt, expected] = String(stored || '').split(':'); if (!salt || !expected) return false; return safeEqual((await hashPassword(password, salt)).split(':')[1], expected); }
+function cookie(res, name, value, maxAge = SESSION_DAYS * 86400) { res.setHeader('Set-Cookie', `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${PUBLIC_BASE_URL.startsWith('https://') ? '; Secure' : ''}`); }
+async function currentUser(req) {
+  if (!configuredAccounts()) return null;
+  const token = cookies(req).motionframe_session; if (!token) return null;
+  const session = await database.collection('sessions').findOne({ tokenHash: sessionHash(token), expiresAt: { $gt: new Date() } });
+  if (!session) return null;
+  return database.collection('users').findOne({ _id: session.userId }, { projection: { passwordHash: 0 } });
+}
+function publicUser(user) { return { id: String(user._id), email: user.email, credits: user.credits }; }
+async function startSession(res, userId) { const token = randomBytes(32).toString('base64url'); await database.collection('sessions').insertOne({ userId, tokenHash: sessionHash(token), expiresAt: new Date(Date.now() + SESSION_DAYS * 86400 * 1000) }); cookie(res, 'motionframe_session', token); }
+async function signUp(req, res) {
+  try { if (!configuredAccounts()) throw new Error('Accounts are not configured yet.'); const { email, password } = await jsonBody(req); const cleanEmail = String(email || '').trim().toLowerCase(), cleanPassword = String(password || '');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) throw new Error('Enter a valid email address.'); if (cleanPassword.length < 10) throw new Error('Use at least 10 characters for your password.');
+    const user = { email: cleanEmail, passwordHash: await hashPassword(cleanPassword), credits: Number(process.env.STARTING_CREDITS || 3), createdAt: new Date() };
+    const created = await database.collection('users').insertOne(user); user._id = created.insertedId; await startSession(res, user._id); json(res, 201, { user: publicUser(user) });
+  } catch (e) { error(res, e?.code === 11000 ? 409 : 400, e?.code === 11000 ? 'An account already exists for this email.' : e.message); }
+}
+async function signIn(req, res) {
+  try { if (!configuredAccounts()) throw new Error('Accounts are not configured yet.'); const { email, password } = await jsonBody(req); const user = await database.collection('users').findOne({ email: String(email || '').trim().toLowerCase() });
+    if (!user || !(await passwordMatches(String(password || ''), user.passwordHash))) throw new Error('Email or password is incorrect.'); await startSession(res, user._id); json(res, 200, { user: publicUser(user) });
+  } catch (e) { error(res, 401, e.message); }
+}
+async function signOut(req, res) { if (configuredAccounts()) { const token = cookies(req).motionframe_session; if (token) await database.collection('sessions').deleteOne({ tokenHash: sessionHash(token) }); } cookie(res, 'motionframe_session', '', 0); json(res, 200, { ok: true }); }
 function requestOrigin(req) { return PUBLIC_BASE_URL || `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host}`; }
 function stripeReady() { return Boolean(STRIPE_SECRET_KEY && STRIPE_WEBHOOK_SECRET && PUBLIC_BASE_URL && STRIPE_PACKS.some(pack => pack.priceId)); }
 async function rawBody(req, limit = 1024 * 1024) { const chunks = []; let total = 0; for await (const chunk of req) { total += chunk.length; if (total > limit) throw new Error('Request body is too large.'); chunks.push(chunk); } return Buffer.concat(chunks); }
@@ -52,10 +97,11 @@ function stripeSignatureIsValid(payload, signature) {
 }
 async function createCheckout(req, res) {
   try {
-    if (!stripeReady()) throw new Error('Stripe is not configured yet.');
+    if (!stripeReady() || !configuredAccounts()) throw new Error('Checkout is not configured yet.');
+    const user = await currentUser(req); if (!user) return error(res, 401, 'Please sign in to buy credits.');
     const body = await jsonBody(req), pack = STRIPE_PACKS.find(item => item.id === body.pack && item.priceId);
     if (!pack) throw new Error('That credit pack is unavailable.');
-    const form = new URLSearchParams({ mode: 'payment', success_url: `${requestOrigin(req)}/?checkout=success`, cancel_url: `${requestOrigin(req)}/?checkout=cancel`, 'line_items[0][price]': pack.priceId, 'line_items[0][quantity]': '1', 'metadata[pack_id]': pack.id, 'metadata[credits]': String(pack.credits) });
+    const form = new URLSearchParams({ mode: 'payment', success_url: `${requestOrigin(req)}/?checkout=success`, cancel_url: `${requestOrigin(req)}/?checkout=cancel`, 'line_items[0][price]': pack.priceId, 'line_items[0][quantity]': '1', 'metadata[pack_id]': pack.id, 'metadata[credits]': String(pack.credits), 'metadata[user_id]': String(user._id), customer_email: user.email });
     const response = await fetch('https://api.stripe.com/v1/checkout/sessions', { method: 'POST', headers: { Authorization: `Basic ${Buffer.from(`${STRIPE_SECRET_KEY}:`).toString('base64')}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: form });
     const session = await response.json(); if (!response.ok || !session.url) throw new Error(session?.error?.message || 'Stripe could not create checkout.');
     json(res, 200, { url: session.url });
@@ -64,17 +110,19 @@ async function createCheckout(req, res) {
 async function stripeWebhook(req, res) {
   try {
     const payload = await rawBody(req); if (!stripeSignatureIsValid(payload, req.headers['stripe-signature'])) return error(res, 400, 'Invalid Stripe signature.');
-    const event = JSON.parse(payload.toString('utf8')); state.stripeEvents ||= {};
-    if (event.type === 'checkout.session.completed' && event.data?.object?.payment_status === 'paid' && !state.stripeEvents[event.id]) {
-      const credits = Number(event.data.object.metadata?.credits), packId = event.data.object.metadata?.pack_id;
+    const event = JSON.parse(payload.toString('utf8'));
+    if (!configuredAccounts()) return error(res, 503, 'Accounts are not configured.');
+    if (event.type === 'checkout.session.completed' && event.data?.object?.payment_status === 'paid') {
+      const credits = Number(event.data.object.metadata?.credits), packId = event.data.object.metadata?.pack_id, userId = event.data.object.metadata?.user_id;
       const pack = STRIPE_PACKS.find(item => item.id === packId && item.credits === credits);
       if (!pack) return error(res, 400, 'Unknown credit pack.');
-      state.account.credits += credits; state.stripeEvents[event.id] = { credits, receivedAt: new Date().toISOString(), sessionId: event.data.object.id }; await persist();
+      const recorded = await database.collection('stripeEvents').updateOne({ eventId: event.id }, { $setOnInsert: { eventId: event.id, credits, userId, receivedAt: new Date(), sessionId: event.data.object.id } }, { upsert: true });
+      if (recorded.upsertedCount) await database.collection('users').updateOne({ _id: new ObjectId(userId) }, { $inc: { credits } });
     }
     json(res, 200, { received: true });
   } catch (e) { error(res, 400, e.message); }
 }
-function setJobStatus(job, patch) { Object.assign(job, patch, { updatedAt: new Date().toISOString() }); return persist(); }
+function setJobStatus(job, patch) { Object.assign(job, patch, { updatedAt: new Date().toISOString() }); return database && job.userId ? database.collection('jobs').updateOne({ id: job.id, userId: job.userId }, { $set: patch }) : persist(); }
 function fileExtension(file) { return path.extname(file.name).toLowerCase() || (file.type === 'image/png' ? '.png' : file.type === 'video/quicktime' ? '.mov' : file.type.startsWith('image/') ? '.jpg' : '.mp4'); }
 async function validUpload(file, types, limit, label) {
   if (!(file instanceof File) || !types.has(file.type)) throw new Error(`${label} must be a supported file type.`);
@@ -140,13 +188,16 @@ async function createJob(req, res) {
   let form;
   try { form = await parseForm(req); } catch (e) { return error(res, 400, 'Could not read this upload.'); }
   try {
+    const user = configuredAccounts() ? await currentUser(req) : null;
+    if (configuredAccounts() && !user) return error(res, 401, 'Please sign in to create a motion clip.');
     if (form.get('rightsConfirmed') !== 'true') throw new Error('Please confirm that you have the rights to use both references.');
     const image = form.get('image'), video = form.get('video'), quality = form.get('quality') === '1080p' ? '1080p' : '720p';
     await validUpload(image, IMAGE_TYPES, 10 * 1024 * 1024, 'Image'); await validUpload(video, VIDEO_TYPES, 100 * 1024 * 1024, 'Video');
-    const cost = creditsFor(quality); if (state.account.credits < cost) throw new Error(`You need ${cost} credits for this quality.`);
-    const id = randomUUID(), job = { id, status: KIE_API_KEY ? 'queued' : 'demo_ready', progress: KIE_API_KEY ? 5 : 100, message: KIE_API_KEY ? 'Your generation is queued securely.' : 'Demo mode is active — no generation was sent.', demo: !KIE_API_KEY, prompt: String(form.get('prompt') || '').slice(0, 2500), quality, background: form.get('background') === 'input_video' ? 'input_video' : 'input_image', createdAt: new Date().toISOString(), cost };
+    const cost = creditsFor(quality), balance = user?.credits ?? state.account.credits; if (balance < cost) throw new Error(`You need ${cost} credits for this quality.`);
+    const id = randomUUID(), job = { id, ...(user ? { userId: user._id } : {}), status: KIE_API_KEY ? 'queued' : 'demo_ready', progress: KIE_API_KEY ? 5 : 100, message: KIE_API_KEY ? 'Your generation is queued securely.' : 'Demo mode is active — no generation was sent.', demo: !KIE_API_KEY, prompt: String(form.get('prompt') || '').slice(0, 2500), quality, background: form.get('background') === 'input_video' ? 'input_video' : 'input_image', createdAt: new Date().toISOString(), cost };
     job.imagePath = await saveFile(image, id, 'image'); job.videoPath = await saveFile(video, id, 'video');
-    state.account.credits -= cost; state.jobs[id] = job; await persist(); json(res, 201, publicJob(job));
+    if (user) { await database.collection('users').updateOne({ _id: user._id, credits: { $gte: cost } }, { $inc: { credits: -cost } }); await database.collection('jobs').insertOne(job); } else { state.account.credits -= cost; state.jobs[id] = job; await persist(); }
+    json(res, 201, publicJob(job, balance - cost));
     if (KIE_API_KEY) startKieJob(job).catch(async e => setJobStatus(job, { status: 'failed', progress: 100, error: e.message }));
   } catch (e) { return error(res, 400, e.message); }
 }
@@ -158,16 +209,20 @@ async function serveStatic(req, res, pathname) {
 }
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`), { pathname } = url;
-  if (req.method === 'GET' && pathname === '/api/account') return json(res, 200, { credits: state.account.credits, live: Boolean(KIE_API_KEY) });
+  if (req.method === 'POST' && pathname === '/api/auth/signup') return signUp(req, res);
+  if (req.method === 'POST' && pathname === '/api/auth/signin') return signIn(req, res);
+  if (req.method === 'POST' && pathname === '/api/auth/signout') return signOut(req, res);
+  if (req.method === 'GET' && pathname === '/api/auth/me') { const user = await currentUser(req); return json(res, 200, { configured: configuredAccounts(), user: user ? publicUser(user) : null }); }
+  if (req.method === 'GET' && pathname === '/api/account') { const user = await currentUser(req); if (configuredAccounts() && !user) return error(res, 401, 'Please sign in.'); return json(res, 200, { credits: user?.credits ?? state.account.credits, live: Boolean(KIE_API_KEY) }); }
   if (req.method === 'GET' && pathname === '/api/credit-packs') return json(res, 200, { enabled: stripeReady(), packs: STRIPE_PACKS.filter(pack => pack.priceId).map(({ id, name, credits }) => ({ id, name, credits })) });
   if (req.method === 'POST' && pathname === '/api/stripe/checkout') return createCheckout(req, res);
   if (req.method === 'POST' && pathname === '/api/stripe/webhook') return stripeWebhook(req, res);
   if (req.method === 'POST' && pathname === '/api/jobs') return createJob(req, res);
-  if (req.method === 'GET' && /^\/api\/jobs\/[\w-]+$/.test(pathname)) { const job = state.jobs[pathname.split('/').pop()]; if (!job) return error(res, 404, 'Job not found.'); try { await refreshKieJob(job); } catch (e) { await setJobStatus(job, { message: 'We could not refresh Kling just now. Retrying automatically…' }); } return json(res, 200, publicJob(job)); }
+  if (req.method === 'GET' && /^\/api\/jobs\/[\w-]+$/.test(pathname)) { const user = await currentUser(req), id = pathname.split('/').pop(); if (configuredAccounts() && !user) return error(res, 401, 'Please sign in.'); const job = user ? await database.collection('jobs').findOne({ id, userId: user._id }) : state.jobs[id]; if (!job) return error(res, 404, 'Job not found.'); try { await refreshKieJob(job); } catch (e) { await setJobStatus(job, { message: 'We could not refresh Kling just now. Retrying automatically…' }); } return json(res, 200, publicJob(job, user?.credits)); }
   if (req.method === 'POST' && pathname === '/api/kie/callback') {
     if (!safeEqual(url.searchParams.get('secret'), CALLBACK_SECRET)) return error(res, 401, 'Invalid callback.');
     const chunks = []; for await (const chunk of req) chunks.push(chunk); const payload = JSON.parse(Buffer.concat(chunks).toString() || '{}');
-    const taskId = String(payload?.data?.taskId || payload?.taskId || ''); const job = Object.values(state.jobs).find(item => item.kieTaskId === taskId);
+    const taskId = String(payload?.data?.taskId || payload?.taskId || ''); const job = database ? await database.collection('jobs').findOne({ kieTaskId: taskId }) : Object.values(state.jobs).find(item => item.kieTaskId === taskId);
     if (job) await refreshKieJob(job); return json(res, 200, { ok: true });
   }
   if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(req, res, pathname);

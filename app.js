@@ -4,6 +4,7 @@ const imageInput = $('#imageInput'), videoInput = $('#videoInput');
 const imagePreview = $('#imagePreview'), videoPreview = $('#videoPreview');
 const consent = $('#rightsConsent'), formMessage = $('#formMessage');
 const generateButton = $('#generateButton'), form = $('#generationForm'), prompt = $('#prompt'), dialog = $('#creditDialog');
+const authDialog = $('#authDialog'), accountButton = $('#accountButton'), authForm = $('#authForm'), authMessage = $('#authMessage');
 const sizeText = size => size < 1024 * 1024 ? `${Math.round(size / 1024)} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
 const setMessage = (message, error = false) => { formMessage.textContent = message; formMessage.style.color = error ? '#b33b35' : ''; };
 const setBalance = credits => { $('.credit-balance strong').textContent = credits; };
@@ -27,6 +28,9 @@ function showFile(type, file) {
   if (type === 'image') preview.querySelector('img').src = URL.createObjectURL(file);
   preview.hidden = false; preview.style.display = 'flex'; updateForm();
 }
+function openAuthDialog(message = 'Create an account or sign in to continue.') { authMessage.textContent = message; authDialog.showModal(); }
+async function authRequest(path) { const response = await fetch(path); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not complete that request.'); return data; }
+async function refreshAuth() { const data = await authRequest('/api/auth/me'); if (!data.configured) return; if (data.user) { accountButton.innerHTML = `${data.user.email.split('@')[0]} <span>↗</span>`; setBalance(data.user.credits); } else accountButton.innerHTML = 'Sign in <span>↗</span>'; }
 function validate(type, file) {
   if (!file) return false;
   const validImage = ['image/jpeg', 'image/png'].includes(file.type) || /\.(jpe?g|png)$/i.test(file.name);
@@ -91,6 +95,10 @@ form.addEventListener('submit', async event => {
   generateButton.disabled = true; setMessage('Uploading references securely…');
   const body = new FormData();
   body.append('image', state.image); body.append('video', state.video); body.append('prompt', prompt.value); body.append('background', $('#background').value); body.append('quality', $('#quality').value); body.append('rightsConfirmed', 'true');
-  try { const response = await fetch('/api/jobs', { method: 'POST', body }); const job = await response.json(); if (!response.ok) throw new Error(job.error || 'Could not start your generation.'); state.jobId = job.id; setBalance(job.credits); showResult(job); $('#resultCard').scrollIntoView({ behavior: 'smooth', block: 'center' }); clearInterval(state.pollTimer); state.pollTimer = setInterval(pollJob, 5000); } catch (error) { setMessage(error.message, true); generateButton.disabled = false; }
+  try { const response = await fetch('/api/jobs', { method: 'POST', body }); const job = await response.json(); if (response.status === 401) { openAuthDialog(job.error); throw new Error('Sign in to create your clip.'); } if (!response.ok) throw new Error(job.error || 'Could not start your generation.'); state.jobId = job.id; setBalance(job.credits); showResult(job); $('#resultCard').scrollIntoView({ behavior: 'smooth', block: 'center' }); clearInterval(state.pollTimer); state.pollTimer = setInterval(pollJob, 5000); } catch (error) { setMessage(error.message, true); generateButton.disabled = false; }
 });
-refreshBalance().catch(error => setMessage(error.message, true));
+accountButton.addEventListener('click', () => openAuthDialog());
+authForm.addEventListener('submit', async event => { event.preventDefault(); const email = $('#authEmail').value, password = $('#authPassword').value; try { const response = await fetch('/api/auth/signin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); authDialog.close(); await refreshAuth(); await refreshBalance(); } catch (error) { authMessage.textContent = error.message; } });
+$('#signUpButton').addEventListener('click', async () => { const email = $('#authEmail').value, password = $('#authPassword').value; try { const response = await fetch('/api/auth/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); authDialog.close(); await refreshAuth(); await refreshBalance(); } catch (error) { authMessage.textContent = error.message; } });
+authDialog.querySelector('.dialog-close').addEventListener('click', () => authDialog.close());
+refreshAuth().catch(() => {}); refreshBalance().catch(error => { if (error.message === 'Please sign in.') return; setMessage(error.message, true); });
