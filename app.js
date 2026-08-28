@@ -30,7 +30,7 @@ function showFile(type, file) {
 }
 function openAuthDialog(message = 'Create an account or sign in to continue.') { authMessage.textContent = message; authDialog.showModal(); }
 async function authRequest(path) { const response = await fetch(path); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not complete that request.'); return data; }
-async function refreshAuth() { const data = await authRequest('/api/auth/me'); if (!data.configured) return; if (data.user) { accountButton.innerHTML = `${data.user.email.split('@')[0]} <span>↗</span>`; setBalance(data.user.credits); } else accountButton.innerHTML = 'Sign in <span>↗</span>'; }
+async function refreshAuth() { const data = await authRequest('/api/auth/me'); if (!data.configured) return data; if (data.user) { accountButton.innerHTML = `${data.user.email.split('@')[0]} <span>↗</span>`; setBalance(data.user.credits); } else { accountButton.innerHTML = 'Sign in <span>↗</span>'; setBalance('—'); } return data; }
 function validate(type, file) {
   if (!file) return false;
   const validImage = ['image/jpeg', 'image/png'].includes(file.type) || /\.(jpe?g|png)$/i.test(file.name);
@@ -85,7 +85,7 @@ function showResult(job) {
   $('.spinner').style.display = completed || failed ? 'none' : '';
   const link = $('#downloadResult'); link.hidden = !job.outputUrl; if (job.outputUrl) link.href = job.outputUrl;
 }
-async function refreshBalance() { const response = await fetch('/api/account'); if (!response.ok) throw new Error('Could not connect to the local server. Start the app with npm run dev.'); const account = await response.json(); setBalance(account.credits); }
+async function refreshBalance() { const response = await fetch('/api/account'); if (response.status === 401) return null; if (!response.ok) throw new Error('Could not connect to Motionframe right now.'); const account = await response.json(); setBalance(account.credits); return account; }
 async function pollJob() {
   if (!state.jobId) return;
   try { const response = await fetch(`/api/jobs/${state.jobId}`); const job = await response.json(); if (!response.ok) throw new Error(job.error || 'Could not check the generation status.'); showResult(job); setBalance(job.credits); if (['succeeded', 'failed', 'canceled', 'demo_ready'].includes(job.status)) clearInterval(state.pollTimer); } catch (error) { $('#progressText').textContent = error.message; }
@@ -101,4 +101,4 @@ accountButton.addEventListener('click', () => openAuthDialog());
 authForm.addEventListener('submit', async event => { event.preventDefault(); const email = $('#authEmail').value, password = $('#authPassword').value; try { const response = await fetch('/api/auth/signin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); authDialog.close(); await refreshAuth(); await refreshBalance(); } catch (error) { authMessage.textContent = error.message; } });
 $('#signUpButton').addEventListener('click', async () => { const email = $('#authEmail').value, password = $('#authPassword').value; try { const response = await fetch('/api/auth/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); authDialog.close(); await refreshAuth(); await refreshBalance(); } catch (error) { authMessage.textContent = error.message; } });
 authDialog.querySelector('.dialog-close').addEventListener('click', () => authDialog.close());
-refreshAuth().catch(() => {}); refreshBalance().catch(error => { if (error.message === 'Please sign in.') return; setMessage(error.message, true); });
+refreshAuth().then(refreshBalance).catch(error => setMessage(error.message, true));
